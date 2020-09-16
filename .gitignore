@@ -10,6 +10,10 @@ cabal-dev
 .cabal-sandbox/
 cabal.sandbox.config
 cabal.config
+dist-newstyle/
+.stack-work/
+stack.yaml.lock
 *.prof
 *.hp
 *.aux
+*~
