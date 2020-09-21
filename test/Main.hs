@@ -1,23 +1,33 @@
-{-# language PatternSignatures #-}
+{-# language PatternSignatures, LambdaCase #-}
 
 import Data.Music.Lilypond.Parse
 import Data.Music.Lilypond.CST
 import Text.Parsec
 import Text.Parsec.Text.Lazy
 import System.IO
-import System.Directory
+import System.FilePattern.Directory
 import System.FilePath
+import System.Environment
 import Control.Exception
-import Control.Monad (forM_, void)
+import Control.Monad (forM, forM_, void)
 
-main = do
-  -- print =<< parseFromFile (parseLily <* eof) "ly-examples/bach-bwv610.ly"
-  -- print =<< parseFromFile (parseLily <* eof) "data/issue-1.ly"
-  let d = "ly-examples"
-  fs <- listDirectory d
-  forM_ (filter ((== ".ly") . takeExtension) fs) $ \ f -> do
-    putStr $ "********* " <> f
+main = getArgs >>= \ case
+  [] -> main_for [ "data" ]
+  args -> main_for args
+
+main_for roots = forM_ roots $ \ root ->  do
+  fs <- getDirectoryFiles root [ "**/*.ly" ]
+  frs <- forM fs $ \ f -> do
     -- FIXME: replace with proper test driver
-    handle (\ (e :: SomeException) -> print e) $ do
-      void $ pff cst ( d </> f)
-      putStrLn " ... OK"
+    result <- handle (\ (e :: SomeException) -> do
+                         print e; return False
+                     ) $ do
+      void $ pff cst $ root </> f
+      return True
+    return (f, result)
+  putStrLn $ unwords
+    [ "files below", root, ":"
+    , show (length frs), "total"
+    , show (length $ filter snd frs), "OK"
+    , show (length $ filter (not . snd) frs), "failed"
+    ]
