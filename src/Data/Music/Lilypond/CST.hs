@@ -218,25 +218,42 @@ string_literal =
   in  char '"' *> manyTill stringChar (char '"')
 
 
--- | parse from file, if it fails, raise exception with nicely formatted text
+-- | parse from file, if it fails, add nicely formatted source snippet
 -- FIXME: move this to separate module
-pff :: Parser a -> FilePath -> IO a
-pff p f = do
+parseFromFileSource
+  :: Int -- ^ lines of context (use 0 .. 2)
+  -> Int -- ^ chars of context (in error line) (use 30)
+  -> Parser a
+  -> FilePath
+  -> IO (Either (ParseError, [ TL.Text ]) a)
+parseFromFileSource lines_context chars_context p f = do
   s <- TL.readFile f
-  case parse p f s of
+  -- note on seq: in case of parse error, file is not closed otherwise
+  seq (TL.length s) $ case parse p f s of
     Left e -> do
       let pos = errorPos e
           row = sourceLine pos - 1
           col = sourceColumn pos - 1
       let (lines_pre, line_err : lines_post) = splitAt row $ TL.lines s
-          context = 2
           ekat k = reverse . take k . reverse
-      let location = replicate col '-' <> "^"
-          msg = map TL.unpack (ekat context lines_pre)
-              <> [ TL.unpack line_err, location ]
-             <> map TL.unpack (take context lines_post)
-      error $ unlines $ show e : "" : msg
-    Right x -> return x
+      let 
+          focus s = let (pre, post) = TL.splitAt (fromIntegral col) s
+                        cc = fromIntegral chars_context
+                        tl_ekat n = TL.reverse . TL.take  n . TL.reverse
+                        pre' = if TL.length pre > cc
+                               then "... " <> tl_ekat cc pre
+                               else pre
+                        post' = if TL.length post > cc
+                               then TL.take cc post <> " ..."
+                                else post
+                  in    pre' <> post'
+          location = replicate col '-' <> "^"
+          
+          msg = ekat lines_context lines_pre
+              <> [ focus line_err, focus $ TL.pack location ]
+             <> take lines_context lines_post
+      return $ Left (e, msg)
+    Right x -> return $ Right x
 
 
 
