@@ -73,7 +73,9 @@ white = void $ many $
 -- so the top-parser must eat whitespace at the start.
 
 cst :: Parser CST
-cst = CST <$> (white *> many item <* eof)
+cst = CST <$> (optional bom *> white *> many item <* eof)
+
+bom = char '\65279' -- wat?
 
 item :: Parser Item
 item =
