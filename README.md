@@ -150,6 +150,16 @@ example inputs:
 ```
 but that's just first error, it could mask more errors later in the same file.
 
+You might think that 5240 (OK) of 5812 (total) looks quite good
+but "OK" just means that the parser did produce *something*.
+These tests don't to any semantics!
+
+We can only test semantics after we have the interpreter
+that converts our CST (concrete syntax tree)
+to music-suite's AST - so that we can use their semantical
+functions (just print, or convert to other formats)
+
+
 ## Status (Interpreter)
 
 not even started ...
