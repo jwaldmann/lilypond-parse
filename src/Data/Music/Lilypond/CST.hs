@@ -15,17 +15,90 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.IO as TL
 
-import Text.Parsec
+import Text.Parsec hiding (State)
+import qualified Control.Monad.State as CMS
 import Text.Parsec.Char
 import Data.Char (isPunctuation,isSymbol)
-import Text.Parsec.Text.Lazy
+import qualified Text.Parsec.Text.Lazy as TPTL
 import qualified Text.Parsec.Language as P
 import qualified Text.Parsec.Token as P
 import Control.Monad (void)
 import Data.Maybe (isJust)
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Q
+import qualified Data.Foldable as F
+import Lens.Micro
+import qualified Data.Text.Prettyprint.Doc as P
+import Data.String (fromString)
+
+type Doc = P.Doc ()
+
+numbered :: [Doc] -> Doc
+numbered xs = P.vcat $ do
+  (i,x) <- zip [1::Int .. ] xs
+  return $ P.pretty i <> ". " <> P.align x
+
+starred :: [Doc] -> Doc
+starred xs = P.vcat $ do
+  (i,x) <- zip [1::Int .. ] xs
+  return $ "* " <> P.align x
+
+p <//> q = P.vcat [p, P.indent 2 $ P.align q ]
 
 data CST = CST [ Item ]
   deriving Show
+
+-- see https://github.com/ejlilley/lilypond-parse/issues/9
+data State = State
+  { current :: ! (Seq Item)
+  -- ^ sequence of items after most recent open delimiter
+  , open :: ! [(String, SourcePos)]
+  -- ^ opening delimiters (parens) that are not closed
+  }
+
+state0 = State { current = mempty, open = mempty }
+
+present :: State -> Doc
+present s = P.vcat
+  [ "most recent items in current group:"
+   <//> numbered (  map (fromString . show . hide_group_content)
+        $ ekat 5 $ F.toList $ current s )
+  , ""
+  , "opening delimiters for most recent unclosed groups:"
+    <//>  numbered ( do
+      (op, pos) <- take 5 $ open s
+      return $ fromString op
+        P.<+> fromString ( show $ hide_name  pos)
+     )
+  ]
+
+hide_name :: SourcePos -> SourcePos
+hide_name = flip setSourceName ""
+
+type Parser = ParsecT TL.Text () (CMS.State State)
+
+-- | @notarize p@ runs @p@ and pushes the result
+-- onto the current state
+notarize_item :: Parser Item -> Parser Item
+notarize_item p = do
+  i <- p
+  CMS.modify' $ \ s ->
+    s { current = current s Q.|> i }
+  return i
+
+notarize_open :: (String, SourcePos) -> Parser ()
+notarize_open (op, here) = CMS.modify' $ \ s ->
+  s { current = mempty , open = (op,here) : open s }
+
+-- | like @between (expects open) (expects close) p@
+-- with extra logging in the state
+group :: String -> String -> Parser a -> Parser a
+group op cl p = do
+  here <- getPosition
+  s <- CMS.get
+  between (expects op) (expects cl)
+     ( notarize_open (op,here) *> p )
+    <* CMS.put s
 
 data Item 
   = Command Text
@@ -47,7 +120,16 @@ data Item
   | DoubleAngles [Item]
   | Identifier Text
   | Scm Lisp
+  | Hidden
   deriving Show
+
+hide_group_content :: Item -> Item
+hide_group_content i = case i of
+  Braces _ -> Braces [Hidden]
+  Angles _ a -> Angles [Hidden] a
+  DoubleAngles _ -> DoubleAngles [Hidden]
+  Scm _ -> Scm Lisp_Hidden
+  _ -> i
 
 data Attach = Attach { duration :: Maybe Text
                      , dots :: [Char]
@@ -67,7 +149,7 @@ white :: Parser ()
 white = void $ many $
        void space
   <|> void ( (try $ string "%{") *> manyTill anyChar (try $ string "%}" ))
-  <|> void ( char '%' *> manyTill anyChar endOfLine )
+  <|> void ( char '%' *> manyTill anyChar (void endOfLine <|> eof) )
 
 -- sub-parsers remove whitespace *after* themselves,
 -- so the top-parser must eat whitespace at the start.
@@ -78,26 +160,26 @@ cst = CST <$> (optional bom *> white *> many item <* eof)
 bom = char '\65279' -- wat?
 
 item :: Parser Item
-item =
-      Command <$> command_name <* white
+item = notarize_item $
+  (   Command <$> command_name <* white
   <|> (String . T.pack ) <$> ( string_literal <* white )
   <|> Number <$> number
   <|> expect '=' *> return Equals
-  <|> Braces <$> (expect '{' *> manyTill item (expect '}') )
-  <|> DoubleAngles <$> (between (expects "<<") (expects ">>") $ many item)
-  <|> Angles <$> (between (expect '<') (expect '>') $ many item)
-            <*> attach
+  <|> Braces <$> (group "{" "}" $ many item )
+  <|> DoubleAngles <$> (group "<<" ">>" $ many item)
+  <|> Angles <$> (group "<" ">"$ many item) <*> attach
   <|> Scm <$> (expect '#' *> lisp <* white)
   -- parens/brackets are not necessarily nested,
   -- hence parse them as single symbols
-  <|> Special <$> (oneOf "()[]|^_~"
-                   <|> satisfy isPunctuation
-                   <|> (notFollowedBy (oneOf "<>")
-                        *> satisfy isSymbol)
+  <|> Special <$> (notFollowedBy (oneOf "<>{}")
+                   *> ( oneOf "()[]|^_~"
+                        <|> satisfy isPunctuation
+                        <|> satisfy isSymbol)
                   ) <* white 
   <|> try pitch 
   <|> name
   <?> "item"
+  )
 
 command_name = T.pack <$>
   ( char '\\' *> (many1 (letter <|> oneOf "-")
@@ -115,7 +197,8 @@ number = (<* white) $ try $ do
          
 -- | e.g.,  a'4*2/3
 pitch = Pitch
-  <$> oneOf "cdefgabsR"
+  <$> oneOf "cdefgabqsrR"
+  -- q: chord repetition, r: rest, R: whole bar rest, s: silent
   <*> many (T.pack <$> choice [string "is", string "es"])
   <*>  optionMaybe (T.pack <$> (many1 $ oneOf ",'"))
   <*> attach
@@ -136,7 +219,7 @@ attach = Attach
              <|> (notFollowedBy (string "\\tweak") *>   try command_name)
              <|> (char ':' *> (T.pack <$> many digit)) -- drum roll
              <|> (char '-' *> (try command_name
-                               <|> T.pack <$> many1 (digit <|> oneOf "!-.+>[") ))
+                               <|> T.pack <$> many1 (digit <|> oneOf "!-.+>[]()") ))
            )
   <* white
    <*> many ( expect '*' *>  number) --     , multipliers :: [Number]
@@ -161,6 +244,7 @@ data Lisp = Symbol Text
   | Unquote Lisp -- comma
   | UnquoteList Lisp -- comma at
   | Ly [Item] -- back to ly
+  | Lisp_Hidden
   deriving Show
 
 lisp :: Parser Lisp
@@ -241,11 +325,14 @@ parseFromFileSource
   -> Int -- ^ chars of context (in error line) (use 30)
   -> Parser a
   -> FilePath
-  -> IO (Either (ParseError, [ TL.Text ]) a)
+  -> IO (Either (ParseError, Doc) a)
 parseFromFileSource lines_context chars_context p f = do
   s <- TL.readFile f
   -- note on seq: in case of parse error, file is not closed otherwise
-  seq (TL.length s) $ case parse p f s of
+  seq (TL.length s) $ return ()
+
+  let (a,st) = flip CMS.runState state0 $ runParserT p () f s
+  return $ case a of
     Left e -> do
       let pos = errorPos e
           row = sourceLine pos - 1
@@ -254,27 +341,29 @@ parseFromFileSource lines_context chars_context p f = do
           (line_err, lines_post) = case lines_err_post of
             [] -> ( "", [])
             l : ls -> (l, ls)
-          ekat k = reverse . take k . reverse
       let 
-          focus s = let (pre, post) = TL.splitAt (fromIntegral col) s
+          focus s = let (pre, post) = splitAt (fromIntegral col) s
                         cc = fromIntegral chars_context
-                        tl_ekat n = TL.reverse . TL.take  n . TL.reverse
-                        pre' = if TL.length pre > cc
-                               then "... " <> tl_ekat cc pre
+                        pre' = if length pre > cc
+                               then "... " <> ekat cc pre
                                else pre
-                        post' = if TL.length post > cc
-                               then TL.take cc post <> " ..."
+                        post' = if length post > cc
+                               then take cc post <> " ..."
                                 else post
-                  in    pre' <> post'
+                  in    fromString $ pre' <> post'
           location = replicate col '-' <> "^"
-          
-          msg = ekat lines_context lines_pre
-              <> [ focus line_err, focus $ TL.pack location ]
-             <> take lines_context lines_post
-      return $ Left (e, msg)
-    Right x -> return $ Right x
+
+          src = P.vcat
+            $ map P.pretty (ekat lines_context lines_pre)
+              <> [ focus $ TL.unpack line_err, focus location ]
+             <> map P.pretty (take lines_context lines_post)
+          msg = P.vcat [src, "", present st ]
+      Left (e, msg)
+    Right x ->
+      Right x
 
 
+ekat k = reverse . take k . reverse
 
 
 

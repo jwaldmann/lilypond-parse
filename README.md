@@ -22,6 +22,7 @@ Install https://hackage.haskell.org/package/ghcid
 
 ```
 cabal build --enable-tests
+cabal run main -- ../MutopiaProject/ftp/Bach*
 ```
 
 For ongoing development, start the following command
