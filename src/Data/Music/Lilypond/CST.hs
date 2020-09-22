@@ -17,10 +17,12 @@ import qualified Data.Text.Lazy.IO as TL
 
 import Text.Parsec
 import Text.Parsec.Char
+import Data.Char (isPunctuation,isSymbol)
 import Text.Parsec.Text.Lazy
 import qualified Text.Parsec.Language as P
 import qualified Text.Parsec.Token as P
 import Control.Monad (void)
+import Data.Maybe (isJust)
 
 data CST = CST [ Item ]
   deriving Show
@@ -78,22 +80,26 @@ item =
       Command <$> command_name <* white
   <|> (String . T.pack ) <$> ( string_literal <* white )
   <|> Number <$> number
-  -- parens/brackets are not necessarily nested,
-  -- hence parse them as single symbols
-  <|> Special <$> (oneOf "()[]|^_~") <* white 
   <|> expect '=' *> return Equals
   <|> Braces <$> (expect '{' *> manyTill item (expect '}') )
   <|> DoubleAngles <$> (between (expects "<<") (expects ">>") $ many item)
   <|> Angles <$> (between (expect '<') (expect '>') $ many item)
             <*> attach
-  <|> Scm <$> (char '#' *> lisp <* white)
+  <|> Scm <$> (expect '#' *> lisp <* white)
+  -- parens/brackets are not necessarily nested,
+  -- hence parse them as single symbols
+  <|> Special <$> (oneOf "()[]|^_~"
+                   <|> satisfy isPunctuation
+                   <|> (notFollowedBy (oneOf "<>")
+                        *> satisfy isSymbol)
+                  ) <* white 
   <|> try pitch 
   <|> name
   <?> "item"
 
 command_name = T.pack <$>
   ( char '\\' *> (many1 (letter <|> oneOf "-")
-                   <|> (return <$> oneOf "<!\\[]")))
+                   <|> (return <$> oneOf "<>()!\\[]")))
 
 number :: Parser Number
 number = (<* white) $ try $ do
@@ -124,8 +130,8 @@ attach = Attach
   <$> optionMaybe (T.pack <$> many1 digit)
   <*> many (char '.')
   <*> optionMaybe (oneOf "!?") -- accidental
-  <*> many (     (notFollowedBy (string "\\tweak") *>   try command_name)
-             <|> try (char '\\' *> (T.pack <$> many1 digit) ) -- stringNumber
+  <*> many (     try (char '\\' *> (T.pack <$> many1 digit) ) -- stringNumber
+             <|> (notFollowedBy (string "\\tweak") *>   try command_name)
              <|> (char ':' *> (T.pack <$> many digit)) -- drum roll
              <|> (char '-' *> (try command_name
                                <|> T.pack <$> many1 (digit <|> oneOf "!-.+>[") ))
@@ -140,8 +146,12 @@ attach = Attach
 -- https://www.cs.cmu.edu/Groups/AI/html/r4rs/r4rs_9.html#SEC68
 data Lisp = Symbol Text
   | Strng Text
-  | Literal Text -- hash
-  | Numbr (Maybe Char) String (Maybe String ) (Maybe String)
+  | Literal Lisp
+  | Numbr { sign :: Maybe Char
+          , integral :: Maybe String
+          , fractional :: Maybe String
+          , exponent :: Maybe String
+          }
   | List [ Lisp ]
   | DotList [Lisp] Lisp
   | Quote Lisp
@@ -153,15 +163,15 @@ data Lisp = Symbol Text
 
 lisp :: Parser Lisp
 lisp = (Strng . T.pack) <$> string_literal <* lisp_white
-  <|> numbr  <* lisp_white
+  <|> try numbr  <* lisp_white
   <|> list
   <|> Ly <$> (lisp_expects "#{" *> manyTill item (lisp_expects "#}") )
-  <|> (Literal . T.pack) <$> (char '#' *> many1 (letter <|> oneOf ":"))
-      <* lisp_white
+  <|> Literal <$> (lisp_expect '#' *> lisp)
   <|> Quote <$> (lisp_expect '\''  *> lisp)
   <|> Backquote <$> (lisp_expect '`' *> lisp)
   <|> Unquote <$> (lisp_expect ',' *> lisp)
-  <|> (Symbol . T.pack) <$> many1 (alphaNum <|> oneOf "-+:*=!?><") <* lisp_white
+  <|> (Symbol . T.pack) <$> many1 (alphaNum <|> oneOf "-+:*=!?></$") <* lisp_white
+  <?> "lisp"
 
 lisp_white = void $ many $
     void ( char ';' *> manyTill anyChar endOfLine )
@@ -169,13 +179,17 @@ lisp_white = void $ many $
 
 -- https://www.cs.cmu.edu/Groups/AI/html/r4rs/r4rs_8.html#SEC51
 -- FIXME:  we risk parsing "." as number.
--- one more risk: parsing "-" or "+" as number (hence try)
+-- one more risk: parsing "-" or "+" as number
 numbr :: Parser Lisp
-numbr = try $ Numbr
-  <$> optionMaybe ( oneOf "+-")
-  <*> (string "inf" <|> many1 digit)
-  <*> (optionMaybe $ char '.' *> many1 digit)
-  <*> (optionMaybe $ (:) <$> oneOf "esfdl" <*> many1 digit)
+numbr = do
+  n <- Numbr
+    <$> optionMaybe ( oneOf "+-")
+    <*> optionMaybe (string "inf" <|> many1 digit)
+    <*> (optionMaybe $ (:) <$> char '.' <*> many1 digit)
+    <*> (optionMaybe $ (:) <$> oneOf "esfdl" <*> many1 digit)
+  if isJust (integral n) || isJust (fractional n)
+    then return n
+    else unexpected "invalid lisp number"
 
 list :: Parser Lisp
 list = lisp_parens $ do
@@ -234,7 +248,10 @@ parseFromFileSource lines_context chars_context p f = do
       let pos = errorPos e
           row = sourceLine pos - 1
           col = sourceColumn pos - 1
-      let (lines_pre, line_err : lines_post) = splitAt row $ TL.lines s
+      let (lines_pre, lines_err_post) = splitAt row $ TL.lines s
+          (line_err, lines_post) = case lines_err_post of
+            [] -> ( "", [])
+            l : ls -> (l, ls)
           ekat k = reverse . take k . reverse
       let 
           focus s = let (pre, post) = TL.splitAt (fromIntegral col) s
