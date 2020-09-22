@@ -225,7 +225,7 @@ instance Show LilyTuplet where
   show (LilyTuplet r e) = "\\tuplet " ++ (show r) ++ " " ++ (show e)
 
 data LilyStaff = LilyStaff (Maybe String) (Maybe LilyContext) LilyExpr -- \new Staff = "staff name" {a '2 e}
-               -- | LilyPianoStaff (Maybe String) (Maybe LilyContext) LilyExpr
+               --  | LilyPianoStaff (Maybe String) (Maybe LilyContext) LilyExpr
 
 instance Show LilyStaff where
   show (LilyStaff (Just s) (Just c) e) = "\\new Staff = \"" ++ s ++ "\" " ++ (show c) ++ " " ++ (show e)
