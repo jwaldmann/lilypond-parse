@@ -36,11 +36,11 @@ main_for roots = forM_ roots $ \ root ->  do
     ]
   let collect = M.fromListWith (<>) $ do
         Just (e, src) <- errors
-        return (errorMessages e, [(e,src)])
-  forM_ (sortOn (negate . length . snd) $ M.toList collect) $ \ (m, srcs) -> do
+        return (sems $ errorMessages e, [(e,src)])
+  forM_ (sortOn (length . snd) $ M.toList collect) $ \ (s, srcs) -> do
     putStrLn $ replicate 50 '*'
     putStr $ show (length srcs) <> " occurrences of error"
-    putStrLn $ sems m
+    putStrLn s
     putStrLn "example inputs:"
     forM_ (take 3 $ nubOn snd srcs) $ \ (e,src) -> do
       print $ errorPos e
