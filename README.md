@@ -22,13 +22,14 @@ Install https://hackage.haskell.org/package/ghcid
 
 ```
 cabal build --enable-tests
-cabal run main -- ../MutopiaProject/ftp/Bach*
+cabal run main -- cst ../MutopiaProject/ftp/Bach*    # new parser
+cabal run main -- parse ../MutopiaProject/ftp/Bach*  # old parser
 ```
 
 For ongoing development, start the following command
 and keep it running:
 ```
-cabal exec -- ghcid -c ghci -W -T ":main ../MutopiaProject/ftp/BachJS" -- -freverse-errors -isrc test/Main.hs
+cabal exec -- ghcid -c ghci -W -T ":main cst ../MutopiaProject/ftp/BachJS" -- -freverse-errors -isrc test/Main.hs
 ```
 Each time you save a file in the editor,
 it will re-load sources files, compile,
