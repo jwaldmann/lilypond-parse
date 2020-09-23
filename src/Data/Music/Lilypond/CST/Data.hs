@@ -18,6 +18,7 @@ data Item
          , attached :: Attach
          }
   | Equals
+  | ModeBraces Text [Item]
   | Braces [Item]
   | Angles { items:: [Item]
            , attached :: Attach
@@ -28,21 +29,12 @@ data Item
   | Hidden
   deriving Show
 
--- | only used for debugging output
-hide_group_content :: Item -> Item
-hide_group_content i = case i of
-  Braces _ -> Braces [Hidden]
-  Angles _ a -> Angles [Hidden] a
-  DoubleAngles _ -> DoubleAngles [Hidden]
-  Scm _ -> Scm Lisp_Hidden
-  _ -> i
-
 data Attach = Attach { duration :: Maybe Text
                      , dots :: [Char]
            , accidental :: Maybe Char
-           , dynamic  :: [Text] -- ^ also articulation, ornamentation
+           , expressive  :: [Text]
+           -- ^ http://lilypond.org/doc/v2.20/Documentation/notation/expressive-marks
            , multipliers :: [Number]
-           , chord :: Maybe Text
            }
     deriving Show
 
@@ -71,4 +63,14 @@ data Lisp = Symbol Text
   | Ly [Item] -- back to ly
   | Lisp_Hidden
   deriving Show
+
+
+-- | only used for debugging output
+hide_group_content :: Item -> Item
+hide_group_content i = case i of
+  Braces _ -> Braces [Hidden]
+  Angles _ a -> Angles [Hidden] a
+  DoubleAngles _ -> DoubleAngles [Hidden]
+  Scm _ -> Scm Lisp_Hidden
+  _ -> i
 

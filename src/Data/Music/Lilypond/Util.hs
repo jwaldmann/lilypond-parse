@@ -16,7 +16,7 @@ data Context = Context
   }
   deriving Show
 
-context0 = Context { lines = 0, chars = 30 }
+context0 = Context { lines = 1, chars = 30 }
 
 source_view con s e =
   let pos = errorPos e

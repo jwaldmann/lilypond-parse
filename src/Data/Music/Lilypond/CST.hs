@@ -29,11 +29,11 @@ import Data.String (fromString)
 import Data.Music.Lilypond.Util
 import Data.Music.Lilypond.CST.Data
 import Data.Music.Lilypond.CST.Parser
+import Lens.Micro.Mtl
 
-
+-- | top-level parser, for contents of lilypond file.
 -- sub-parsers remove whitespace *after* themselves,
 -- so the top-parser must eat whitespace at the start.
-
 cst :: Parser CST
 cst = CST <$> (optional bom *> white *> many item <* eof)
 
@@ -41,11 +41,12 @@ bom = char '\65279' -- wat?
 
 item :: Parser Item
 item = notarize_item $
-  (   Command <$> command_name <* white
+  (   mode_switched_group
   <|> (String . T.pack ) <$> ( string_literal <* white )
   <|> Number <$> number <* white
   <|> expect '=' *> return Equals
-  <|> Braces <$> (group "{" "}" $ many item )
+  <|> Command <$>  command_name  <* white
+  <|> Braces <$> (group "{" "}" $ many item)
   <|> DoubleAngles <$> (group "<<" ">>" $ many item)
   <|> Angles <$> (group "<" ">" $ many item) <*> attach
   <|> Scm <$> (expect '#' *> lisp <* white)
@@ -60,6 +61,26 @@ item = notarize_item $
   <|> name
   <?> "item"
   )
+
+-- http://lilypond.org/doc/v2.20/Documentation/notation/input-modes
+mode_switched_group :: Parser Item
+mode_switched_group = do
+  notFollowedBy $ string "\\lyricsto" -- argh
+  (s,m) <- choice $ map ( \ (s,m) -> expects s *> return (s,m) )
+     [ ("\\chordmode", Chord), ("\\chords", Chord)
+     , ("\\drummode" , Drum   ),  ("\\drums" , Drum)
+     , ("\\figuremode" , Figure ), ("\\figures" , Figure)
+     , ("\\lyricmode" , Lyrics ), ("\\lyrics" , Lyrics ), ("\\addlyrics" , Lyrics)
+     , ("\\markup" , Markup)
+     , ("\\notemode" , Note)
+     ]
+  ModeBraces (T.pack s) <$> group "{" "}" (with_mode m $ many item)
+
+with_mode :: Mode -> Parser a -> Parser a
+with_mode m p = do
+  old <- (mode <<.= m)
+  p <* (mode .= old)
+  
 
 command_name = T.pack <$>
   ( char '\\' *> (many1 (letter <|> oneOf "-")
@@ -82,7 +103,6 @@ pitch = Pitch
   <*> many (T.pack <$> choice [string "is", string "es"])
   <*>  optionMaybe (T.pack <$> (many1 $ oneOf ",'"))
   <*> attach
-  <* white
 
 -- | e.g., NoteColumn.ignore-collision
 -- FIXME: currently, also strings inside lyricsmode are parsed as names
@@ -95,18 +115,18 @@ attach = Attach
   <$> optionMaybe (T.pack <$> many1 digit)
   <*> many (char '.')
   <*> optionMaybe (oneOf "!?") -- accidental
-  <*> many (     try (char '\\' *> (T.pack <$> many1 digit) ) -- stringNumber
+  <*> many (     try (cons_char '\\' (T.pack <$> many1 digit) ) -- stringNumber
              <|> (notFollowedBy (string "\\tweak") *>   try command_name)
-             <|> (char ':' *> (T.pack <$> many digit)) -- drum roll
-             <|> (char '-' *> (try command_name
-                               <|> T.pack <$> many1 (digit <|> oneOf "!-.+>[]()") ))
+             <|> (cons_char ':' (T.pack <$> many digit)) -- drum roll
+             <|> (cons_char '-' (try command_name
+                         <|> (T.singleton <$> (digit <|> oneOf "!-.+>[]()"))))
            )
   <* white
    <*> many ( expect '*' *>  number) --     , multipliers :: [Number]
-   <*> return Nothing
-   -- <*> optionMaybe (char ':' *> (T.pack <$> many1 alphaNum)) -- , chord :: Maybe Text
    <* white
 
+cons_char :: Char -> Parser Text -> Parser Text
+cons_char c p = T.cons <$> char c *>  p
    
 lisp :: Parser Lisp
 lisp = (Strng . T.pack) <$> string_literal <* lisp_white

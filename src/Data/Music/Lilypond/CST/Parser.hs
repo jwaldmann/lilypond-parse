@@ -7,6 +7,7 @@ import Data.Music.Lilypond.CST.Data
 import Data.Music.Lilypond.Util
 
 import Lens.Micro
+import Lens.Micro.Mtl
 import Lens.Micro.TH
 
 import Text.Parsec hiding (State)
@@ -65,17 +66,19 @@ hide_name = flip setSourceName ""
 
 type Parser = ParsecT TL.Text () (CMS.State State)
 
+
 -- | @notarize p@ runs @p@ and pushes the result
 -- onto the current state
 notarize_item :: Parser Item -> Parser Item
 notarize_item p = do
   i <- p
-  CMS.modify' $ over current (Q.|> i)
+  current %= (Q.|> i)
   return i
 
 notarize_open :: (String, SourcePos) -> Parser ()
-notarize_open (op, here) = CMS.modify' $
-  set current mempty . over open ((op,here):)
+notarize_open (op, here) = do
+  current .= mempty
+  open %= ((op,here):)
 
 -- | like @between (expects open) (expects close) p@
 -- with extra logging in the state
@@ -86,7 +89,6 @@ group op cl p = do
   between (expects op) (expects cl)
      ( notarize_open (op,here) *> p )
     <* CMS.put s
-
 
 white :: Parser ()
 white = void $ many $
