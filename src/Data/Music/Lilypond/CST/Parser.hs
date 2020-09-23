@@ -33,6 +33,9 @@ data Mode = Chord | Drum | Figure | Lyrics | Markup | Note
 data State = State
   { _mode :: ! Mode
   -- ^ lexical analysis depends on current input mode
+  , _next_mode :: ! (Maybe Mode)
+  -- ^ the mode that was announced recently,
+  -- but we didn't see the open { for
   , _current :: ! (Seq Item)
   -- ^ sequence of items after most recent open delimiter
   , _open :: ! [(String, SourcePos)]
@@ -42,6 +45,7 @@ data State = State
 $(makeLenses ''State)
 
 state0 = State { _mode = Note
+               , _next_mode = Nothing
                , _current = mempty
                , _open = mempty
                }
@@ -49,6 +53,7 @@ state0 = State { _mode = Note
 present :: State -> Doc
 present s = P.vcat
   [ "mode:" <//> fromString (show $ s ^. mode)
+  , "next_mode:" <//> fromString (show $ s ^. next_mode)
   , "most recent items in current group:"
    <//> numbered (  map (fromString . show . hide_group_content)
         $ ekat 5 $ F.toList $ s ^. current )

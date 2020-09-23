@@ -20,11 +20,12 @@ import Data.Char (isPunctuation,isSymbol)
 import qualified Text.Parsec.Text.Lazy as TPTL
 import qualified Text.Parsec.Language as P
 import qualified Text.Parsec.Token as P
-import Control.Monad (void)
+import Control.Monad (void, guard)
 import Data.Maybe (isJust)
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Q
 import Data.String (fromString)
+import qualified Data.Map.Strict as M
 
 import Data.Music.Lilypond.Util
 import Data.Music.Lilypond.CST.Data
@@ -40,51 +41,66 @@ cst = CST <$> (optional bom *> white *> many item <* eof)
 bom = char '\65279' -- wat?
 
 item :: Parser Item
-item = notarize_item $
-  (   mode_switched_group
-  <|> (String . T.pack ) <$> ( string_literal <* white )
+item = notarize_item $ notFollowedBy (char '}') *>
+  (   (String . T.pack ) <$> ( string_literal <* white )
   <|> Number <$> number <* white
   <|> expect '=' *> return Equals
-  <|> Command <$>  command_name  <* white
-  <|> Braces <$> (group "{" "}" $ many item)
+  <|> Command <$> notarize_mode_switch command_name  <* white
+  <|> Braces <$> (group "{" "}" $ with_switched_mode $ many item)
   <|> DoubleAngles <$> (group "<<" ">>" $ many item)
   <|> Angles <$> (group "<" ">" $ many item) <*> attach
   <|> Scm <$> (expect '#' *> lisp <* white)
+  <|> special <* white
+{-  
   -- parens/brackets are not necessarily nested,
   -- hence parse them as single symbols
   <|> Special <$> (notFollowedBy (oneOf "<>{}")
                    *> ( oneOf "()[]|^_~"
                         <|> satisfy isPunctuation
                         <|> satisfy isSymbol)
-                  ) <* white 
-  <|> try pitch 
+                  ) <* white
+-}
+  <|> when_mode Note *> pitch 
   <|> name
   <?> "item"
   )
 
--- http://lilypond.org/doc/v2.20/Documentation/notation/input-modes
-mode_switched_group :: Parser Item
-mode_switched_group = do
-  notFollowedBy $ string "\\lyricsto" -- argh
-  (s,m) <- choice $ map ( \ (s,m) -> expects s *> return (s,m) )
-     [ ("\\chordmode", Chord), ("\\chords", Chord)
-     , ("\\drummode" , Drum   ),  ("\\drums" , Drum)
-     , ("\\figuremode" , Figure ), ("\\figures" , Figure)
-     , ("\\lyricmode" , Lyrics ), ("\\lyrics" , Lyrics ), ("\\addlyrics" , Lyrics)
-     , ("\\markup" , Markup)
-     , ("\\notemode" , Note)
-     ]
-  ModeBraces (T.pack s) <$> group "{" "}" (with_mode m $ many item)
+special
+  =  when_mode Markup *> 
+     (Special <$> (satisfy isSymbol
+                   <|> satisfy isPunctuation
+                  ))
+  <|> when_mode Note *> (Special <$> oneOf "|[]~")
 
-with_mode :: Mode -> Parser a -> Parser a
-with_mode m p = do
-  old <- (mode <<.= m)
-  p <* (mode .= old)
-  
+
+-- http://lilypond.org/doc/v2.20/Documentation/notation/input-modes
+when_mode :: Mode -> Parser ()
+when_mode m = use mode >>= (guard  . (== m))
+
+notarize_mode_switch :: Parser Text -> Parser Text
+notarize_mode_switch p = do
+  s <- p
+  let modes = M.fromList
+        [ ("chordmode", Chord), ("chords", Chord)
+        , ("drummode" , Drum   ),  ("drums" , Drum)
+        , ("figuremode" , Figure ), ("figures" , Figure)
+        , ("lyricmode" , Lyrics ), ("lyrics" , Lyrics ), ("addlyrics" , Lyrics)
+        , ("markup" , Markup)
+        , ("notemode" , Note)
+        ]
+  next_mode .=  M.lookup s modes 
+  return s  
+
+with_switched_mode :: Parser a -> Parser a
+with_switched_mode p = (next_mode <<.= Nothing) >>= \ case
+  Nothing -> p
+  Just m -> do
+    previous <- (mode <<.= m)
+    p <* (mode .= previous)
+    
 
 command_name = T.pack <$>
-  ( char '\\' *> (many1 (letter <|> oneOf "-")
-                   <|> (return <$> oneOf "<>()!\\[]")))
+  ( char '\\' *> (many1 letter))
 
 number :: Parser Number
 number = (<* white) $ try $ do
@@ -98,17 +114,22 @@ number = (<* white) $ try $ do
          
 -- | e.g.,  a'4*2/3
 pitch = Pitch
-  <$> oneOf "cdefgabqsrR"
+  <$> oneOf "cdefgabhqsrR" -- h: german b
   -- q: chord repetition, r: rest, R: whole bar rest, s: silent
   <*> many (T.pack <$> choice [string "is", string "es"])
   <*>  optionMaybe (T.pack <$> (many1 $ oneOf ",'"))
   <*> attach
 
 -- | e.g., NoteColumn.ignore-collision
--- FIXME: currently, also strings inside lyricsmode are parsed as names
-name = (Name . T.pack) 
-  <$> ( many1 (letter <|> oneOf ".-:,!" ))
-  <* white
+-- also strings inside lyricsmode. FIXME?
+name = (Name . T.pack)
+ <$>  ( when_mode Lyrics *>
+          many1 (letter <|> digit <|> satisfy isPunctuation )
+      <|> notFollowedBy (char '.') *>
+          many1 (letter <|> char '.')
+      )
+ <* white      
+
                 
 attach :: Parser Attach
 attach = Attach
