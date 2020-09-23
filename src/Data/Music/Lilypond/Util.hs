@@ -9,6 +9,7 @@ import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.IO as TL
 
 import Prelude hiding (lines) -- argh
+import Data.List (tails)
 
 data Context = Context
   { lines :: Int
@@ -25,7 +26,7 @@ source_view con s e =
       (lines_pre, lines_err_post) = splitAt row $ TL.lines s
       (line_err, lines_post) = case lines_err_post of
         [] -> ( "", [])
-        l : ls -> (l, ls)
+        l : ls -> (TL.unpack l, ls)
       focus s =
         let (pre, post) = splitAt col s
             cc = chars con
@@ -36,14 +37,27 @@ source_view con s e =
                     then take cc post <> " ..."
                     else post
         in    fromString $ pre' <> post'
-      location = take (fromIntegral $ TL.length line_err)
+      location = take (length $ untab 8 line_err)
          $ replicate col '-'  <> "^" <> repeat '-'
+      -- NOTE on tabulators: parsec updates sourcepos
+      -- w.r.t. the assumption that tab-width is 8
+      -- so we have to do the same.
   in  P.vcat
             $ map P.pretty (ekat (lines con) lines_pre)
-              <> [ focus $ TL.unpack line_err, focus location ]
+              <> [ focus $ untab 8 line_err
+                 , focus $ untab 8 location
+                 ]
              <> map P.pretty (take (lines con) lines_post)
   
 ekat k = reverse . take k . reverse
+
+untab w s =
+  let go p [] = []
+      go p (c:cs) = case c of
+        '\t' -> let d = w - mod p w
+                in  replicate d ' ' <> go (p + d) cs
+        _ -> c : go (p+1) cs
+  in  go 0 s
 
 type Doc = P.Doc ()
 
