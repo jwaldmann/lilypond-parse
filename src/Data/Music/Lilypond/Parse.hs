@@ -22,6 +22,8 @@ module Data.Music.Lilypond.Parse
         parseExpr, parseExprs, parseTopLevel, parseLily,
         expandVariables, expandRel, expandDur,
         mapNotes, mapIdents, mapSeqs, mapExprs
+
+       , parseFromFileSource
        ) where
 
 import Prelude hiding (negate)
@@ -35,8 +37,18 @@ import Control.Monad (MonadPlus(..), ap)
 
 import Text.Parsec
 import Text.Parsec.Token
-import Text.Parsec.String
-import Text.Parsec.Language (haskell) -- use Haskell-style floats etc. for now
+import Text.Parsec.Text.Lazy
+import Data.Text.Lazy (Text)
+import Control.Monad.Identity
+import Text.Parsec.Language (emptyDef)
+
+import qualified Data.Text.Prettyprint.Doc as P
+import qualified Data.Text.Lazy as TL
+import qualified Data.Text.Lazy.IO as TL
+
+import Data.Music.Lilypond.Util
+
+-- import Text.Parsec.Language (haskell) -- use Haskell-style floats etc. for now
 
 -- import Music (AbstractNote(..),Note2(..), Name(..), Accidental(..),
               -- AbstractPitch2(..), AbstractDur2(..), AbstractInt2(..), AbstractPhrase(..),
@@ -499,7 +511,7 @@ parseNoteDurs = try (doubleDotted <$> parseBaseDur <* (char '.') <* (char '.'))
                 <|> try (readLongDur <$> parseLongDur)
                 <|> (readDur <$> parseBaseDur)
 
-parseOctave :: Parsec String () LilyOctave
+parseOctave :: Parser LilyOctave
 parseOctave = try (LilyOctaveCheck <$> (char '=' *> parseOctave')) <|> (LilyOctave <$> parseOctave')
   where parseUpOctave = (fromIntegral . length) <$> many1 (char '\'')
         parseDownOctave = (fromIntegral . (*(-1)) . length) <$> many1 (char ',')
@@ -509,7 +521,7 @@ parseOctave = try (LilyOctaveCheck <$> (char '=' *> parseOctave')) <|> (LilyOcta
 singlet x = [x]
 collapse = foldl (++) []
 
-parseNote :: Parsec String () LilyNote
+parseNote :: Parser LilyNote
 parseNote = (LilyRest <$> (char 'r' *> (parseNoteDurs <|> return (-1))))
             <|> (LilyFullRest <$> (char 'R' *> (parseNoteDurs <|> return (-1))))
             <|> (LilySkip <$> (char 's' *> (parseNoteDurs <|> return (-1))))
@@ -534,13 +546,13 @@ parseNotes = collapse <$> (many (sorc *> (    (try (singlet <$> parseNoteFrac))
 
 -- parseNotes = many (spaces *> parseNote <* spaces)
 
-parseSeq :: Parsec String () LilySequential
+parseSeq :: Parser LilySequential
 parseSeq = LilySequential <$> ((char '{') *> parseExprs <* (char '}'))
 
-parseSim :: Parsec String () LilySimultaneous
+parseSim :: Parser LilySimultaneous
 parseSim = LilySimultaneous <$> ((string "<<") *> (try parseExprsSlashes <|> parseExprs) <* (string ">>"))
 
-parseChord :: Parsec String () LilyChord
+parseChord :: Parser LilyChord
 parseChord = LilyChord <$> ((char '<') *> parseNotes <* (char '>')) <*> (parseNoteDurs <|> return (-1))
 
 parseBar = LilyBar <$> ((Nothing <$ (char '|'))
@@ -674,11 +686,11 @@ validIdentifiers = ['a'..'z'] ++ ['A'..'Z'] ++ ['.', '-']
 
 parseIdent = LilyIdentifier <$> ((char '\\') *> (many1 $ oneOf validIdentifiers))
 
-parseTime :: Parsec String () LilyTime
+parseTime :: Parser LilyTime
 parseTime = (,) <$> (string "\\time" *> sorc *> parseLitInt)
             <*> (sorc *> char '/' *> (readDur <$> parseBaseDur))
 
-parseClef :: Parsec String () LilyClef
+parseClef :: Parser LilyClef
 parseClef = (string "\\clef" *> sorc) *> (
       try (Treble <$ string "treble")
   <|> try (Bass <$ string "bass")
@@ -688,7 +700,7 @@ parseClef = (string "\\clef" *> sorc) *> (
   <|> (ArbitraryClef <$> parseLitString)
       )
 
-parseKey :: Parsec String () LilyKey
+parseKey :: Parser LilyKey
 parseKey = try (Major <$> ((string "\\key" *> sorc) *> (toLilyNoteName <$> parseNoteName) <* sorc <* (string "\\major")))
            <|> Minor <$> ((string "\\key" *> sorc) *> (toLilyNoteName <$> parseNoteName) <* sorc <* (string "\\minor"))
 
@@ -707,7 +719,7 @@ parseLyricmode = string "\\lyricmode" *> sorc *> braces' (many $ oneOf lyricChar
 parseLyrics = LilyLyrics <$> ((string "\\new") *> sorc *> (string "Lyrics") *> sorc *> (string "\\lyricsto") *> sorc *> parseLitString) <*> (sorc *> parseExpr)
 
 -- just one expression
-parseExpr :: Parsec String () LilyExpr
+parseExpr :: Parser LilyExpr
 parseExpr =     try (Seq <$> parseSeq)
             <|> try (Sim <$> parseSim)
             <|> try (Chord <$> parseChord)
@@ -750,7 +762,7 @@ parseExprs = try (collapse <$> (many $ sorc *> (    try ((singlet . Note) <$> pa
 parseExprsSlashes = (:) <$> (sorc *> parseExpr <* sorc <* (string "\\\\") <* sorc) <*> ((sorc *> parseExpr <* sorc) `sepBy1` (string "\\\\"))
 
 -- a single top-level expression
-parseTopLevel :: Parsec String () LilyTopLevel
+parseTopLevel :: Parser LilyTopLevel
 parseTopLevel =     try (Score <$> parseScore)
                 <|> try (Header <$> parseHeader)
                 <|> try (Version <$> parseVersion)
@@ -761,7 +773,7 @@ parseTopLevel =     try (Score <$> parseScore)
         <?> "top-level expression"
 
 -- a file is a list of top-level expressions
-parseLily :: Parsec String () LilyFile
+parseLily :: Parser LilyFile
 parseLily = many $ sorc *> parseTopLevel <* sorc
 
 spacesOrComments = skipMany $ comment <|> space'
@@ -769,7 +781,7 @@ spacesOrComments = skipMany $ comment <|> space'
                          comment = string "%" >> manyTill anyChar newline >> return ()
 sorc = spacesOrComments -- shorthand
 
-parseHeader :: Parsec String () [LilyAssignment]
+parseHeader :: Parser [LilyAssignment]
 parseHeader = (string "\\header") *> sorc *> braces' (many parseAssign)
 
 instance Enum LilyNote where
@@ -1113,3 +1125,37 @@ expandVarsRecAss d (LilyOverride a) = LilyOverride (expandVarsRecAss d a)
 expandVarsRecAss d (LilyOnce a) = LilyOnce (expandVarsRecAss d a)
 
 expandVariables = expandVarsRec []
+
+parseFromFileSource
+  :: Context
+  -> Parser a
+  -> FilePath
+  -> IO (Either (ParseError, P.Doc ()) a)
+parseFromFileSource con p f = do
+  s <- TL.readFile f
+  -- note on seq: in case of parse error, file is not closed otherwise
+  seq (TL.length s) $ return ()
+
+  let a = runParser p () f s
+  return $ case a of
+    Left e -> 
+      let src = source_view con s e
+      in  Left (e, src)
+    Right x ->
+      Right x
+
+-- https://github.com/haskell/parsec/issues/55
+haskell = makeTokenParser haskellStyle
+haskellStyle = emptyDef
+                { commentStart   = "{-"
+                , commentEnd     = "-}"
+                , commentLine    = "--"
+                , nestedComments = True
+                , identStart     = letter
+                , identLetter    = alphaNum <|> oneOf "_'"
+                , opStart        = opLetter haskellStyle
+                , opLetter       = oneOf ":!#$%&*+./<=>?@\\^|-~"
+                , reservedOpNames= []
+                , reservedNames  = []
+                , caseSensitive  = True
+                }

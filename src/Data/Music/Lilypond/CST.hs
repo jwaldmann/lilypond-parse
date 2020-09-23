@@ -31,19 +31,8 @@ import Lens.Micro
 import qualified Data.Text.Prettyprint.Doc as P
 import Data.String (fromString)
 
-type Doc = P.Doc ()
+import Data.Music.Lilypond.Util
 
-numbered :: [Doc] -> Doc
-numbered xs = P.vcat $ do
-  (i,x) <- zip [1::Int .. ] xs
-  return $ P.pretty i <> ". " <> P.align x
-
-starred :: [Doc] -> Doc
-starred xs = P.vcat $ do
-  (i,x) <- zip [1::Int .. ] xs
-  return $ "* " <> P.align x
-
-p <//> q = P.vcat [p, P.indent 2 $ P.align q ]
 
 data CST = CST [ Item ]
   deriving Show
@@ -318,52 +307,29 @@ string_literal =
   in  char '"' *> manyTill stringChar (char '"')
 
 
+
 -- | parse from file, if it fails, add nicely formatted source snippet
 -- FIXME: move this to separate module
 parseFromFileSource
-  :: Int -- ^ lines of context (use 0 .. 2)
-  -> Int -- ^ chars of context (in error line) (use 30)
+  :: Context
   -> Parser a
   -> FilePath
   -> IO (Either (ParseError, Doc) a)
-parseFromFileSource lines_context chars_context p f = do
+parseFromFileSource con p f = do
   s <- TL.readFile f
-  -- note on seq: in case of parse error, file is not closed otherwise
+  -- note on seq: in case of parse error,
+  -- file is not closed otherwise
   seq (TL.length s) $ return ()
 
   let (a,st) = flip CMS.runState state0 $ runParserT p () f s
   return $ case a of
-    Left e -> do
-      let pos = errorPos e
-          row = sourceLine pos - 1
-          col = sourceColumn pos - 1
-      let (lines_pre, lines_err_post) = splitAt row $ TL.lines s
-          (line_err, lines_post) = case lines_err_post of
-            [] -> ( "", [])
-            l : ls -> (l, ls)
-      let 
-          focus s = let (pre, post) = splitAt (fromIntegral col) s
-                        cc = fromIntegral chars_context
-                        pre' = if length pre > cc
-                               then "... " <> ekat cc pre
-                               else pre
-                        post' = if length post > cc
-                               then take cc post <> " ..."
-                                else post
-                  in    fromString $ pre' <> post'
-          location = replicate col '-' <> "^"
-
-          src = P.vcat
-            $ map P.pretty (ekat lines_context lines_pre)
-              <> [ focus $ TL.unpack line_err, focus location ]
-             <> map P.pretty (take lines_context lines_post)
+    Left e -> 
+      let src = source_view con s e
           msg = P.vcat [src, "", present st ]
-      Left (e, msg)
+      in  Left (e, msg)
     Right x ->
       Right x
 
-
-ekat k = reverse . take k . reverse
 
 
 

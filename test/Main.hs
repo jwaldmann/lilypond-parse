@@ -1,8 +1,10 @@
 {-# language PatternSignatures, LambdaCase #-}
 {-# language OverloadedStrings #-}
 
-import Data.Music.Lilypond.Parse
-import Data.Music.Lilypond.CST
+import qualified Data.Music.Lilypond.Parse as DMLP
+import qualified Data.Music.Lilypond.CST as DMLC
+import Data.Music.Lilypond.Util
+
 import Text.Parsec
 import Text.Parsec.Error
 import Text.Parsec.Text.Lazy
@@ -20,16 +22,23 @@ import Data.Function (on)
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.Text
 import Data.String (fromString)
+import Control.Monad.State (lift)
 
 main = getArgs >>= \ case
-  [] -> main_for [ "data" ]
+  
+  [] -> main_for  [ "cst",  "data" ]
   args -> main_for args
 
-main_for roots = forM_ roots $ \ root ->  do
+main_for (variant : roots) = forM_ roots $ \ root ->  do
   fs <- getDirectoryFiles root [ "**/*.ly" ]
   errors <- forM fs $ \ f -> do
     -- FIXME: replace with proper test driver
-    ( parseFromFileSource 0 30 cst $ root </> f ) >>= \ case
+    let run f = case variant of
+          "parse" -> fmap (const ())
+            <$> DMLP.parseFromFileSource context0 DMLP.parseLily f
+          "cst" -> fmap (const ())
+            <$> DMLC.parseFromFileSource context0 DMLC.cst f
+    (run  $ root </> f ) >>= \ case
       Left (e, src) -> return $ Just (e, src)
       Right _ -> return Nothing
   let separator = fromString $ replicate 50 '*'
