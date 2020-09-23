@@ -3,6 +3,7 @@
 
 import qualified Data.Music.Lilypond.Parse as DMLP
 import qualified Data.Music.Lilypond.CST as DMLC
+import qualified Data.Music.Lilypond.CST.Parser as DMLC
 import Data.Music.Lilypond.Util
 
 import Text.Parsec

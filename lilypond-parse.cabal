@@ -23,12 +23,14 @@ library
     build-depends:      base                    >= 4 && < 5,
                         parsec                  >= 3.1,
                         text,
-                        microlens,
+                        microlens,microlens-th,microlens-mtl,
                         containers,
                         mtl,
                         prettyprinter
     exposed-modules:    Data.Music.Lilypond.Parse,
                         Data.Music.Lilypond.CST
+                        Data.Music.Lilypond.CST.Data
+                        Data.Music.Lilypond.CST.Parser
                         Data.Music.Lilypond.Util
     hs-source-dirs:     src
     default-language:   Haskell2010
