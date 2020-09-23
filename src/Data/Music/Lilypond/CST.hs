@@ -70,7 +70,7 @@ special
      (Special <$> (satisfy isSymbol
                    <|> satisfy isPunctuation
                   ))
-  <|> when_mode Note *> (Special <$> oneOf "|[]~")
+  <|> when_mode Note *> (Special <$> oneOf "|[]()~")
 
 
 -- http://lilypond.org/doc/v2.20/Documentation/notation/input-modes
@@ -100,7 +100,10 @@ with_switched_mode p = (next_mode <<.= Nothing) >>= \ case
     
 
 command_name = T.pack <$>
-  ( char '\\' *> (many1 letter))
+  ( char '\\' *> (many1 letter <|> string "\\"
+                 <|> string "<" <|> string ">"
+                 <|> string "!"
+                 ))
 
 number :: Parser Number
 number = (<* white) $ try $ do
@@ -126,7 +129,7 @@ name = (Name . T.pack)
  <$>  ( when_mode Lyrics *>
           many1 (letter <|> digit <|> satisfy isPunctuation )
       <|> notFollowedBy (char '.') *>
-          many1 (letter <|> char '.')
+          many1 (letter <|> oneOf ".-")
       )
  <* white      
 
