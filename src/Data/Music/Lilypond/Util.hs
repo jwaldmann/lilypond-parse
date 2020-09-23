@@ -16,7 +16,7 @@ data Context = Context
   }
   deriving Show
 
-context0 = Context { lines = 1, chars = 30 }
+context0 = Context { lines = 0, chars = 30 }
 
 source_view con s e =
   let pos = errorPos e
@@ -36,7 +36,8 @@ source_view con s e =
                     then take cc post <> " ..."
                     else post
         in    fromString $ pre' <> post'
-      location = replicate col '-' <> "^"
+      location = take (fromIntegral $ TL.length line_err)
+         $ replicate col '-'  <> "^" <> repeat '-'
   in  P.vcat
             $ map P.pretty (ekat (lines con) lines_pre)
               <> [ focus $ TL.unpack line_err, focus location ]
