@@ -64,7 +64,8 @@ main_for (variant : roots) = forM_ roots $ \ root ->  do
       , "example inputs:" <//>
        ( starred $ do
           (e,doc) <- take 3 docs
-          return $ vcat [ "location:" <+> fromString ( show $ errorPos e)
+          return $ vcat [ pretty s
+                        , "location:" <//> fromString ( show $ errorPos e)
                         , ""
                         , doc
                         , ""

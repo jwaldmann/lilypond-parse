@@ -14,7 +14,7 @@ module Data.Music.Lilypond.CST where
 import Data.Text (Text)
 import qualified Data.Text as T
 
-import Text.Parsec hiding (State)
+import Text.Parsec hiding (State, try)
 import Text.Parsec.Char
 import Data.Char (isPunctuation,isSymbol)
 import qualified Text.Parsec.Text.Lazy as TPTL
@@ -28,8 +28,9 @@ import Data.String (fromString)
 import qualified Data.Map.Strict as M
 
 import Data.Music.Lilypond.Util
-import Data.Music.Lilypond.CST.Data
-import Data.Music.Lilypond.CST.Parser
+import Data.Music.Lilypond.CST.Data as D
+import Data.Music.Lilypond.CST.Parser as P
+
 import Lens.Micro.Mtl
 
 -- | top-level parser, for contents of lilypond file.
@@ -46,31 +47,28 @@ item = notarize_item $ notFollowedBy (char '}') *>
   <|> Number <$> number <* white
   <|> expect '=' *> return Equals
   <|> Command <$> notarize_mode_switch command_name  <* white
-  <|> Braces <$> (group "{" "}" $ with_switched_mode $ many item)
-  <|> DoubleAngles <$> (group "<<" ">>" $ many item)
-  <|> Angles <$> (group "<" ">" $ many item) <*> attach
+  <|> Braces <$> (groupManySwitch "{" "}" item)
+  <|> DoubleAngles <$> (groupMany "<<" ">>" item)
+  <|> Angles <$> (groupMany "<" ">" item) <*> attach <* white
   <|> Scm <$> (expect '#' *> lisp <* white)
+  <|> multiplier
+  <|> expressive 
   <|> special <* white
-{-  
-  -- parens/brackets are not necessarily nested,
-  -- hence parse them as single symbols
-  <|> Special <$> (notFollowedBy (oneOf "<>{}")
-                   *> ( oneOf "()[]|^_~"
-                        <|> satisfy isPunctuation
-                        <|> satisfy isSymbol)
-                  ) <* white
--}
-  <|> when_mode Note *> pitch 
-  <|> name
+  <|> when_mode P.Note *> try note <* white
+  <|> when_mode P.Chord *> chord <* white
+  <|> Name <$> name <* white
   <?> "item"
   )
+
 
 special
   =  when_mode Markup *> 
      (Special <$> (satisfy isSymbol
                    <|> satisfy isPunctuation
                   ))
-  <|> when_mode Note *> (Special <$> oneOf "|[]()~")
+  <|> when_mode P.Note *> (Special <$> oneOf "|[]()~")
+  <|> when_mode Lyrics *> (Special <$> oneOf "|")
+  <|> when_mode P.Chord *> (Special <$> oneOf "|")
 
 
 -- http://lilypond.org/doc/v2.20/Documentation/notation/input-modes
@@ -81,32 +79,27 @@ notarize_mode_switch :: Parser Text -> Parser Text
 notarize_mode_switch p = do
   s <- p
   let modes = M.fromList
-        [ ("chordmode", Chord), ("chords", Chord)
+        [ ("chordmode", P.Chord), ("chords", P.Chord)
         , ("drummode" , Drum   ),  ("drums" , Drum)
         , ("figuremode" , Figure ), ("figures" , Figure)
         , ("lyricmode" , Lyrics ), ("lyrics" , Lyrics ), ("addlyrics" , Lyrics)
         , ("markup" , Markup)
-        , ("notemode" , Note)
+        , ("notemode" , P.Note)
         ]
   next_mode .=  M.lookup s modes 
   return s  
 
-with_switched_mode :: Parser a -> Parser a
-with_switched_mode p = (next_mode <<.= Nothing) >>= \ case
-  Nothing -> p
-  Just m -> do
-    previous <- (mode <<.= m)
-    p <* (mode .= previous)
-    
 
 command_name = T.pack <$>
-  ( char '\\' *> (many1 letter <|> string "\\"
+  ( char '\\' *> (many1 (letter {- <|> digit -} )
+                  <|> string "\\"
                  <|> string "<" <|> string ">"
                  <|> string "!"
+                 <|> string "(" <|> string ")"
                  ))
 
 number :: Parser Number
-number = (<* white) $ try $ do
+number = try $ do
   s <- optionMaybe $ oneOf "+-"
   top <- T.pack <$> many1 digit
   option (Integ s top) $ choice
@@ -114,18 +107,59 @@ number = (<* white) $ try $ do
     , char '.' *> ((Dotted s top . T.pack) <$>  many digit)
     ]
 
+-- | base note, accidentals (no octave, etc.)
+pitch :: Parser Pitch
+pitch = do
+  base <- oneOf "cdefgabhsrR" -- h: german b
+  -- r: rest, R: whole bar rest, s: silent
+  acc <- if elem base ("ae" :: String)
+    then option [] (char 's' *> return [Es])
+    else return []
+  (Pitch base . (acc <>)) <$> accidentals 
+
+-- | http://lilypond.org/doc/v2.20/Documentation/notation/writing-pitches#note-names-in-other-languages
+accidentals = many $ choices
+       [("is",Is),("es",Es)
+       ,("flat",Flat),("sharp",Sharp)
+       ,("eh",Eh),("ih",Ih)
+       ]
          
--- | e.g.,  a'4*2/3
-pitch = Pitch
-  <$> oneOf "cdefgabhqsrR" -- h: german b
-  -- q: chord repetition, r: rest, R: whole bar rest, s: silent
-  <*> many (T.pack <$> choice [string "is", string "es"])
-  <*>  optionMaybe (T.pack <$> (many1 $ oneOf ",'"))
+note = D.Note
+  <$> pitch
+  <*> (many $ choices [(",",Down),("'",Up)])
   <*> attach
+
+-- | http://lilypond.org/doc/v2.20/Documentation/notation/chord-mode
+chord = do
+  p <- pitch; a <- attach
+  option (D.Chord p a None [] [] Nothing) $ do
+    char ':'
+    D.Chord p a 
+      <$> option None (choices
+                      [("m",Min),("dim",Dim),("aug",Aug),("maj",Maj),("sus", Sus)])
+      <*> flip sepBy (char '.') step
+      <*> option [] (char '^' *> flip sepBy (char '.') nat )
+      <*> optionMaybe (char '/' *>
+                     ( Inversion <$> (optionMaybe $ char '+') <*> pitch ))
+
+nat = read <$> many1 digit 
+
+step :: Parser Step
+step = Step <$> nat <*> optionMaybe (oneOf "+-")
+
+choices :: [(String,a)] -> Parser a
+choices  =
+  choice . map (\ (k,v) -> string k *> return v) 
 
 -- | e.g., NoteColumn.ignore-collision
 -- also strings inside lyricsmode. FIXME?
-name = (Name . T.pack)
+
+-- FIXME in a Ly group inside a Scheme group,
+-- there can be identifiers starting with dollar sign.
+-- example: MutopiaProject/ftp/Traditional/greensleeves_guitar/greensleeves_guitar.ly
+-- probably WONTFIX as long as we don't execute the Scheme code?
+
+name = T.pack
  <$>  ( when_mode Lyrics *>
           many1 (letter <|> digit <|> satisfy isPunctuation )
       <|> notFollowedBy (char '.') *>
@@ -133,41 +167,39 @@ name = (Name . T.pack)
       )
  <* white      
 
-                
 attach :: Parser Attach
 attach = Attach
-  <$> optionMaybe (T.pack <$> many1 digit)
+  <$> optionMaybe (oneOf "!?") -- accidental
+  <*> optionMaybe (T.pack <$> many1 digit)
   <*> many (char '.')
-  <*> optionMaybe (oneOf "!?") -- accidental
-  <*> many (     try (cons_char '\\' (T.pack <$> many1 digit) ) -- stringNumber
-             <|> (notFollowedBy (string "\\tweak") *>   try command_name)
-             <|> (cons_char ':' (T.pack <$> many digit)) -- drum roll
-             <|> (cons_char '-' (try command_name
-                         <|> (T.singleton <$> (digit <|> oneOf "!-.+>[]()"))))
-           )
+  <*> optionMaybe (char ':' *> optionMaybe nat)
+
+expressive :: Parser Item
+expressive = Expressive
+  <$> choices [("-", Dash),("^",Super),("_",Sub)]
+  <*> optionMaybe (oneOf "^+-!>._" )
   <* white
-   <*> many ( expect '*' *>  number) --     , multipliers :: [Number]
-   <* white
+
+text :: String -> Parser Text
+text s = fromString <$> string s
+
+multiplier = Multiplier <$> ( expect '*' *>  number <* white)
 
 cons_char :: Char -> Parser Text -> Parser Text
 cons_char c p = T.cons <$> char c *>  p
    
 lisp :: Parser Lisp
-lisp = (Strng . T.pack) <$> string_literal <* lisp_white
-  <|> try numbr  <* lisp_white
+lisp = (Strng . T.pack) <$> string_literal <* white
+  <|> try numbr  <* white
   <|> list
-  <|> Ly <$> (lisp_expects "#{" *> manyTill item (lisp_expects "#}") )
-  <|> Literal <$> (lisp_expect '#' *> lisp)
-  <|> Quote <$> (lisp_expect '\''  *> lisp)
-  <|> Backquote <$> (lisp_expect '`' *> lisp)
-  <|> Unquote <$> (lisp_expect ',' *> lisp)
-  <|> (Symbol . T.pack) <$> many1 (alphaNum <|> oneOf "-+:*=!?></$") <* lisp_white
+  <|> Ly <$> (expects "#{" *> manyTill item (expects "#}") )
+  <|> Literal <$> (expect '#' *> lisp)
+  <|> Quote <$> (expect '\''  *> lisp)
+  <|> Backquote <$> (expect '`' *> lisp)
+  <|> Unquote <$> (expect ',' *> lisp)
+  <|> (Symbol . T.pack) <$> many1 (alphaNum <|> oneOf "-+:*=!?></$") <* white
   <?> "lisp"
 
--- FIXME: this is wrong - they use lilypond comments (%) ?
-lisp_white = void $ many $
-    void ( char ';' *> manyTill anyChar endOfLine )
-    <|> void space
 
 -- https://www.cs.cmu.edu/Groups/AI/html/r4rs/r4rs_8.html#SEC51
 -- FIXME:  we risk parsing "." as number.
@@ -184,29 +216,16 @@ numbr = do
     else unexpected "invalid lisp number"
 
 list :: Parser Lisp
-list = lisp_parens $ do
+list = parens $ do
   prefix <- many lisp
   option (List prefix)
-    (DotList prefix <$> (char '.' *> notFollowedBy alphaNum *> lisp_white *> lisp))
+    (DotList prefix <$> (char '.' *> notFollowedBy alphaNum *> white *> lisp))
            
 braces :: Parser a -> Parser a
 braces = between (expect '{') (expect '}')
 
 parens :: Parser a -> Parser a
 parens = between (expect '(') (expect ')')
-
-
-lisp_expect :: Char -> Parser ()
-lisp_expect c = char c *> lisp_white
-
-lisp_expects :: String -> Parser ()
-lisp_expects s = try (string s) *> lisp_white
-
-lisp_braces :: Parser a -> Parser a
-lisp_braces = between (lisp_expect '{') (lisp_expect '}')
-
-lisp_parens :: Parser a -> Parser a
-lisp_parens = between (lisp_expect '(') (lisp_expect ')')
 
 
 string_literal :: Parser String

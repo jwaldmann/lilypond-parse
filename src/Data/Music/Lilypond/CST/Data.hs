@@ -10,13 +10,20 @@ data Item
   | String Text
   | Number Number
   | Special Char -- ^ for single ( ) [ ]
-  | Articulation Text  -- ^ starts with "-"
+  | Expressive Height (Maybe Char) -- ^ starts with oneOf "^-_"
+  | Multiplier Number  -- ^ starts with "*"
   | Name Text
-  | Pitch { note :: Char
-          , accidentals :: [Text]
-         , octave :: Maybe Text
+  | Note { note_pitch :: Pitch
+         , octave :: [Octave]
          , attached :: Attach
          }
+  | Chord { chord_pitch :: Pitch
+          , attached :: Attach
+          , shape :: Shape
+          , added :: [Step]
+          , removed :: [Int]
+          , inversion :: Maybe Inversion
+          } -- ^ this is for the part after ':'
   | Equals
   | ModeBraces Text [Item]
   | Braces [Item]
@@ -29,12 +36,43 @@ data Item
   | Hidden
   deriving Show
 
-data Attach = Attach { duration :: Maybe Text
+data Pitch = Pitch Char [Accidental]
+  deriving Show
+
+data Accidental = Es | Is
+  | Flat | Sharp -- ^ english
+  | Eh | Ih -- ^ quarters
+  deriving Show
+
+data Octave = Down | Up
+  deriving Show
+
+-- | http://lilypond.org/doc/v2.20/Documentation/notation/expressive-marks
+-- FIXME: docs say "expressive marks ... attached to notes".
+-- how do we represent this attachment?
+-- for now, they just appear next to a note,
+-- but are not part of that note.
+data Height = Sub | Dash | Super
+  deriving Show
+
+
+-- http://lilypond.org/doc/v2.20/Documentation/notation/chord-mode
+data Shape = None | Min | Dim | Aug | Maj | Sus
+  deriving Show
+
+data Step = Step Int (Maybe Char)
+  deriving Show
+
+data Inversion = Inversion (Maybe Char) Pitch
+  deriving Show
+
+-- | after pitch or chord (in single < >)
+data Attach = Attach { accidental :: Maybe Char
+
+                     , duration :: Maybe Text
                      , dots :: [Char]
-           , accidental :: Maybe Char
-           , expressive  :: [Text]
-           -- ^ http://lilypond.org/doc/v2.20/Documentation/notation/expressive-marks
-           , multipliers :: [Number]
+                     -- | http://lilypond.org/doc/v2.20/Documentation/notation/short-repeats#tremolo-repeats
+                     , tremolo :: Maybe (Maybe Int)
            }
     deriving Show
 

@@ -3,14 +3,18 @@
 
 module Data.Music.Lilypond.CST.Parser where
 
+-- FIXME: this is wrong (only needed because Parser type
+-- refers to Item, only used in error messages)
 import Data.Music.Lilypond.CST.Data
+
 import Data.Music.Lilypond.Util
 
 import Lens.Micro
 import Lens.Micro.Mtl
 import Lens.Micro.TH
 
-import Text.Parsec hiding (State)
+import Text.Parsec hiding (State, try)
+import qualified Text.Parsec as TP
 import Text.Parsec.Pos
 import qualified Control.Monad.State.Strict as CMS
 import Control.Monad (void)
@@ -44,7 +48,7 @@ data State = State
 
 $(makeLenses ''State)
 
-state0 = State { _mode = Note
+state0 = State { _mode = Data.Music.Lilypond.CST.Parser.Note
                , _next_mode = Nothing
                , _current = mempty
                , _open = mempty
@@ -52,8 +56,8 @@ state0 = State { _mode = Note
 
 present :: State -> Doc
 present s = P.vcat
-  [ "mode:" <//> fromString (show $ s ^. mode)
-  , "next_mode:" <//> fromString (show $ s ^. next_mode)
+  [ "mode:" P.<+> fromString (show $ s ^. mode)
+  , "next_mode:" P.<+> fromString (show $ s ^. next_mode)
   , "most recent items in current group:"
    <//> numbered (  map (fromString . show . hide_group_content)
         $ ekat 5 $ F.toList $ s ^. current )
@@ -95,6 +99,23 @@ group op cl p = do
      ( notarize_open (op,here) *> p )
     <* CMS.put s
 
+groupMany op cl p = do
+  expects op
+  here <- getPosition
+  s <- CMS.get
+  notarize_open (op,here) *>  manyTill p (expects cl) <* CMS.put s
+
+groupManySwitch op cl p = do
+  expects op
+  here <- getPosition
+  m <- next_mode <<.= Nothing
+  s <- CMS.get
+  notarize_open (op,here)
+    *> (case m of
+          Nothing -> return (); Just m -> mode .= m )
+    *> manyTill p (expects cl)
+    <* CMS.put s
+
 white :: Parser ()
 white = void $ many $
        void space
@@ -107,6 +128,10 @@ expect c = char c *> white
 expects :: String -> Parser ()
 expects s = try (string s) *> white
 
+try :: Parser a -> Parser a
+try p = do
+  s <- CMS.get
+  TP.try p <|> (CMS.put s *> parserZero)
 
 -- | parse from file, if it fails, add nicely formatted source snippet
 -- FIXME: move this to separate module
